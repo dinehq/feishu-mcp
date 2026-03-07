@@ -13,6 +13,9 @@
 
 import { createServer } from "node:http";
 import { execSync } from "node:child_process";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 
 const BASE_URL = "https://open.feishu.cn";
 
@@ -113,16 +116,28 @@ const server = createServer(async (req, res) => {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end("<h1>Authorization successful!</h1><p>You can close this tab.</p>");
 
+    // Save tokens to disk for the MCP server to pick up
+    const tokenDir = join(homedir(), ".feishu-mcp");
+    mkdirSync(tokenDir, { recursive: true });
+    writeFileSync(
+      join(tokenDir, "tokens.json"),
+      JSON.stringify(
+        {
+          userToken: tokenData.access_token,
+          refreshToken: tokenData.refresh_token,
+          expiresAt: Date.now() + (tokenData.expires_in - 60) * 1000,
+        },
+        null,
+        2
+      )
+    );
+
     console.log("--- Token obtained successfully ---\n");
-    console.log(`user_access_token:  ${tokenData.access_token}`);
-    console.log(`refresh_token:      ${tokenData.refresh_token}`);
+    console.log(`Tokens saved to ~/.feishu-mcp/tokens.json`);
     console.log(`expires_in:         ${tokenData.expires_in}s`);
     console.log(`refresh_expires_in: ${tokenData.refresh_expires_in}s`);
-    console.log(`\nAdd -u flag to your MCP config:\n`);
-    console.log(`  "-u", "${tokenData.access_token}"`);
-    console.log(`\nOr to auto-refresh, add both -u and -r:\n`);
-    console.log(`  "-u", "${tokenData.access_token}",`);
-    console.log(`  "-r", "${tokenData.refresh_token}"`);
+    console.log(`\nThe MCP server will auto-load these tokens. No -u/-r flags needed.`);
+    console.log(`Just restart the MCP server with: -a APP_ID -s APP_SECRET`);
   } catch (err) {
     res.writeHead(500);
     res.end(`Error: ${err}`);

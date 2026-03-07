@@ -3,6 +3,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 
 const BASE_URL = "https://open.feishu.cn";
 
@@ -21,12 +24,55 @@ function parseArgs() {
 
 const config = parseArgs();
 
-// Token management
+// Persistent token storage
+const TOKEN_DIR = join(homedir(), ".feishu-mcp");
+const TOKEN_FILE = join(TOKEN_DIR, "tokens.json");
+
+interface StoredTokens {
+  userToken: string;
+  refreshToken: string;
+  expiresAt: number;
+}
+
+function loadTokens(): StoredTokens | null {
+  try {
+    const data = JSON.parse(readFileSync(TOKEN_FILE, "utf-8"));
+    return data as StoredTokens;
+  } catch {
+    return null;
+  }
+}
+
+function saveTokens(tokens: StoredTokens) {
+  mkdirSync(TOKEN_DIR, { recursive: true });
+  writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2));
+}
+
+// Token management — stored tokens take priority for expiry tracking
+const stored = loadTokens();
+
 let tenantToken: string | null = null;
 let tenantTokenExpiry = 0;
-let userToken: string | null = config.userToken || null;
-let refreshToken: string | null = config.refreshToken || null;
-let userTokenExpiry = config.userToken ? Date.now() + 6000 * 1000 : 0; // assume ~100min initially
+let userToken: string | null = config.userToken ?? stored?.userToken ?? null;
+let refreshToken: string | null = config.refreshToken ?? stored?.refreshToken ?? null;
+
+// If CLI token matches stored token, trust the stored expiry (not a fresh token).
+// Only treat as fresh if it's a genuinely new token.
+let userTokenExpiry: number;
+if (config.userToken && stored?.userToken === config.userToken) {
+  // Same token as stored — use the real expiry
+  userTokenExpiry = stored.expiresAt;
+} else if (config.userToken) {
+  // New token from CLI — assume fresh
+  userTokenExpiry = Date.now() + (7200 - 60) * 1000;
+} else {
+  userTokenExpiry = stored?.expiresAt ?? 0;
+}
+
+// Persist CLI-provided tokens so they survive restarts
+if (config.userToken && refreshToken && config.userToken !== stored?.userToken) {
+  saveTokens({ userToken: userToken!, refreshToken, expiresAt: userTokenExpiry });
+}
 
 async function getTenantToken(): Promise<string> {
   if (tenantToken && Date.now() < tenantTokenExpiry) return tenantToken;
@@ -91,6 +137,7 @@ async function refreshUserToken(): Promise<string> {
   userToken = data.data.access_token;
   refreshToken = data.data.refresh_token;
   userTokenExpiry = Date.now() + (data.data.expires_in - 60) * 1000;
+  saveTokens({ userToken: userToken!, refreshToken: refreshToken!, expiresAt: userTokenExpiry });
   return userToken!;
 }
 
@@ -114,7 +161,23 @@ async function feishuGet(path: string, params?: Record<string, string>) {
   }
   const headers = await getAuthHeader();
   const res = await fetch(url.toString(), { headers });
-  return res.json();
+  const data = await res.json();
+
+  // If token expired, refresh and retry once
+  if (data.code === 99991663 || data.code === 99991664) {
+    if (refreshToken) {
+      try {
+        await refreshUserToken();
+        const retryHeaders = await getAuthHeader();
+        const retryRes = await fetch(url.toString(), { headers: retryHeaders });
+        return retryRes.json();
+      } catch {
+        // refresh failed, return original error
+      }
+    }
+  }
+
+  return data;
 }
 
 // MCP Server
