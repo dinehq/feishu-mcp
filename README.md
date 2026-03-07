@@ -10,6 +10,21 @@ pnpm install
 
 ## 使用
 
+### 0. 创建飞书应用
+
+前往[飞书开放平台](https://open.feishu.cn/app)创建一个**自建应用**：
+
+1. 登录开放平台，点击「创建自建应用」
+2. 进入应用，在「权限管理」中开通以下权限：
+   - `sheets:spreadsheet:readonly` — 读取电子表格
+   - `docx:document:readonly` — 读取文档
+   - `bitable:app:readonly` — 读取多维表格
+   - `drive:drive:readonly` — 读取云空间
+3. 在「安全设置」中添加重定向 URL：`http://localhost:3000/callback`
+4. 在「凭证与基础信息」中获取 **App ID** 和 **App Secret**
+
+> 应用需要发布版本后，权限才会生效。如果只在开发环境使用，可以创建测试版本并添加可用性范围。
+
 ### 1. 获取用户令牌
 
 ```sh
